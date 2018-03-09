@@ -1,0 +1,248 @@
+#!/bin/bash
+
+#
+# Simple script that synchronizes BTRFS snapshots locally or through SSH.
+# Features compression, retention policy and automatic incremental sync
+#
+# Usage:
+#  btrfs-sync [options] <src> [<src>...] [[user@]host:]<dir>
+#
+#  -k|--keep NUM     keep only last <NUM> sync'ed snapshots
+#  -d|--delete       delete snapshots in <dst> that don't exist in <src>
+#  -z|--xz           use xz     compression. Saves bandwidth, but uses one CPU
+#  -Z|--pbzip2       use pbzip2 compression. Saves bandwidth, but uses all CPUs
+#  -q|--quiet        don't display progress
+#  -v|--verbose      display more information
+#  -h|--help         show usage
+#
+# <src> can either be a single snapshot, or a folder containing snapshots
+# <user> requires privileged permissions at <host> for the 'btrfs' command
+#
+# Cron example: daily synchronization over the internet, keep only last 50
+#
+# cat > /etc/cron.daily/btrfs-sync <<EOF
+# #!/bin/bash
+# /usr/local/sbin/btrfs-sync -q -k50 -z /home user@host:/path/to/snaps
+# EOF
+# chmod +x /etc/cron.daily/btrfs-sync
+#
+# Copyleft 2018 by Ignacio Nunez Hernanz <nacho _a_t_ ownyourbits _d_o_t_ com>
+# GPL licensed (see end of file) * Use at your own risk!
+#
+# More at https://ownyourbits.com
+#
+
+# help
+print_usage() {
+  echo "Usage: 
+  $BIN [options] <src> [<src>...] [[user@]host:]<dir>
+
+  -k|--keep NUM     keep only last <NUM> sync'ed snapshots
+  -d|--delete       delete snapshots in <dst> that don't exist in <src>
+  -z|--xz           use xz     compression. Saves bandwidth, but uses one CPU
+  -Z|--pbzip2       use pbzip2 compression. Saves bandwidth, but uses all CPUs
+  -q|--quiet        don't display progress
+  -v|--verbose      display more information
+  -h|--help         show usage
+
+<src> can either be a single snapshot, or a folder containing snapshots
+<user> requires privileged permissions at <host> for the 'btrfs' command
+
+Cron example: daily synchronization over the internet, keep only last 50
+
+cat > /etc/cron.daily/btrfs-sync <<EOF
+#!/bin/bash
+/usr/local/sbin/btrfs-sync -q -k50 -z /home user@host:/path/to/snaps
+EOF
+chmod +x /etc/cron.daily/btrfs-sync
+"
+}
+
+echov() { [[ "$VERBOSE" == 1 ]] && echo "$@" || true; }
+
+#----------------------------------------------------------------------------------------------------------
+
+# parse arguments
+BIN="${0##*/}"
+KEEP=0
+ZIP=cat PIZ=cat
+SILENT=">/dev/null"
+
+OPTS=$( getopt -o hqzZk:dv -l quiet -l help -l xz -l pbzip2 -l keep: -l delete -l verbose -- "$@" 2>/dev/null )
+[[ $? -ne 0 ]] && { echo "error parsing arguments"; exit 1; }
+eval set -- "$OPTS"
+
+while true; do
+  case "$1" in
+    -h|--help   ) print_usage; exit  0 ;;
+    -q|--quiet  ) QUIET=1    ; shift 1 ;;
+    -d|--delete ) DELETE=1   ; shift 1 ;;
+    -k|--keep   ) KEEP=$2    ; shift 2 ;;
+    -z|--xz     ) ZIP=xz     PIZ=( xz     -d ); shift 1 ;;
+    -Z|--pbzip2 ) ZIP=pbzip2 PIZ=( pbzip2 -d ); shift 1 ;;
+    -v|--verbose) SILENT=""  VERBOSE=1        ; shift 1 ;;
+    --)                shift;  break   ;;
+  esac
+done
+
+SRC=( "${@:1:$#-1}" )
+DST="${@: -1}"
+
+# detect remote dst argument
+[[ "$DST" =~ : ]] && {
+  NET="$( sed 's|:.*||' <<<"$DST" )"
+  DST="$( sed 's|.*:||' <<<"$DST" )"
+  SSH=( ssh -o ServerAliveInterval=5 -o ConnectTimeout=1 "$NET" )
+}
+[[ "$SSH" != "" ]] && DST_CMD=( ${SSH[@]} ) || DST_CMD=( eval )
+
+#----------------------------------------------------------------------------------------------------------
+
+# checks
+
+## general checks
+[[ $# -lt 2      ]]            && { print_usage                                ; exit 1; }
+[[ ${EUID} -ne 0 ]]            && { echo "Must be run as root. Try 'sudo $BIN'"; exit 1; }
+${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"            ; exit 1; }
+
+## src checks
+for s in "${SRC[@]}"; do
+  src="$(cd "$s" &>/dev/null && pwd)" || { echo "$s not found"; exit 1; } #abspath
+  btrfs subvolume show "$src" &>/dev/null && SRCS+=( "$src" ) || \
+  for dir in $( ls -drt "$src"/* 2>/dev/null ); do
+    btrfs subvolume show "$dir" &>/dev/null && SRCS+=( "$dir" )
+  done
+done
+[[ ${#SRCS[@]} -eq 0 ]] && { echo "no BTRFS subvolumes found"; exit 1; }
+
+## check pbzip2
+[[ "$ZIP" == "pbzip2" ]] && {
+                    type pbzip2 &>/dev/null && \
+    "${DST_CMD[@]}" type pbzip2 &>/dev/null || {
+      echo "INFO: 'pbzip2' not installed on both ends, fallback to 'xz'"
+      ZIP=xz PIZ=unxz 
+  }
+}
+
+## use 'pv' command if available
+PV=( pv -F"time elapsed [%t] | rate %r | total size [%b]" )
+[[ "$QUIET" == "1" ]] && PV=( cat ) || type pv &>/dev/null || {
+  echo "INFO: install the 'pv' package in order to get a progress indicator"
+  PV=( cat )
+}
+
+#----------------------------------------------------------------------------------------------------------
+
+# sync snapshots
+
+## get dst snapshots ( DSTS, DST_UUIDS )
+get_dst_snapshots() {
+  local DST="$1"
+  unset DSTS DST_UUIDS
+  while read entry; do
+    DST_UUIDS+=( "$( sed 's=|.*==' <<<"$entry" )" )
+    DSTS+=(      "$( sed 's=.*|==' <<<"$entry" )" )
+  done < <( 
+    "${DST_CMD[@]}" "
+      DSTS=( \$( ls -d \"$DST\"/* 2>/dev/null ) )
+      for dst in \${DSTS[@]}; do
+        UUID=\$( sudo btrfs su sh \"\$dst\" 2>/dev/null | grep 'Received UUID' | awk '{ print \$3 }' )
+        [[ \"\$UUID\" == \"-\" ]] || [[ \"\$UUID\" == \"\" ]] && continue
+        echo \"\$UUID|\$dst\"
+      done" 
+  )
+}
+
+## sync incrementally
+sync_snapshot() {
+  local SRC="$1"
+  local ID LIST PATH_ DATE SECS SEEDS SEED SEED_PATH SEED_ARG
+
+  # detect existing
+  SRC_UUID=$( btrfs su sh "$SRC" | grep "UUID:" | head -1 | awk '{ print $2 }' )
+  for id in "${DST_UUIDS[@]}"; do
+    [[ "$SRC_UUID" == "$id" ]] && { echov "* Skip existing '$SRC'"; return 0; }
+  done
+
+  # try to get most recent src snapshot that exists in dst to use as a seed
+  LIST="$( btrfs subvolume list -su "$SRC" )"
+  for id in "${DST_UUIDS[@]}"; do
+    ID=$(btrfs su sh -u "$id" "$SRC" 2>/dev/null|grep "UUID:"|head -1|awk '{print $2}')
+    PATH_=$( awk "{ if ( \$14 == \"$ID\" ) print \$16       }" <<<"$LIST" )
+    DATE=$(  awk "{ if ( \$14 == \"$ID\" ) print \$11, \$12 }" <<<"$LIST" )
+
+    [[ "$ID" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
+
+    SECS=$( date -d "$DATE" +"%s" )
+    SEEDS+=( "$SECS|$PATH_" )
+  done
+  SEED="$(for s in "${SEEDS[@]}";do echo "$s";done|sort -V|tail -1|cut -f2 -d'|')"
+
+  # incremental sync argument
+  [[ "$SEED" != "" ]] && {
+    SEED_PATH="$( dirname "$SRC" )/$( basename $SEED )"
+    [[ -d "$SEED_PATH" ]] && 
+      SEED_ARG=( -p "$SEED_PATH" ) || \
+      echo "INFO: couldn't find $SEED_PATH. Non-incremental mode"
+  }
+
+  # do it
+  echo -n "* Synchronizing '$src'"
+  [[ "$SEED_ARG" != "" ]] && echov -n " using seed '$SEED'"
+  echo "..."
+
+  { btrfs send -q ${SEED_ARG[@]} "$SRC" \
+    | "$ZIP" \
+    | "${PV[@]}" \
+    | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 | grep -v '^At subvol '" \
+    || exit 1; } | grep -v "^At snapshot "
+  get_dst_snapshots "$DST" # sets DSTS DST_UUIDS
+}
+
+#----------------------------------------------------------------------------------------------------------
+
+# sync all snapshots found in src
+get_dst_snapshots "$DST" # sets DSTS DST_UUIDS
+for src in "${SRCS[@]}"; do
+  sync_snapshot "$src"
+done
+
+#----------------------------------------------------------------------------------------------------------
+
+# retention policy
+[[ "$KEEP" != 0 ]] && \
+  [[ ${#DSTS[@]} -gt $KEEP ]] && \
+  echov "* Pruning old snapshots..." && \
+  for (( i=0; i < $(( ${#DSTS[@]} - KEEP )); i++ )); do
+    PRUNE_LIST+=( "${DSTS[$i]}" )
+  done && \
+  ${DST_CMD[@]} sudo btrfs subvolume delete "${PRUNE_LIST[@]}" $SILENT
+
+# delete flag
+[[ "$DELETE" == 1 ]] && \
+  for dst in "${DSTS[@]}"; do
+    FOUND=0
+    for src in "${SRCS[@]}"; do
+      [[ "$( basename $src )" == "$( basename $dst )" ]] && { FOUND=1; break; }
+    done
+    [[ "$FOUND" == 0 ]] && DEL_LIST+=( "$dst" )
+  done
+[[ "$DEL_LIST" != "" ]] && \
+  echov "* Deleting non existent snapshots..." && \
+  ${DST_CMD[@]} sudo btrfs subvolume delete "${DEL_LIST[@]}" $SILENT
+
+# License
+#
+# This script is free software; you can redistribute it and/or modify it
+# under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This script is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this script; if not, write to the
+# Free Software Foundation, Inc., 59 Temple Place, Suite 330,
