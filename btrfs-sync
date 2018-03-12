@@ -106,13 +106,18 @@ DST="${@: -1}"
 ${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"            ; exit 1; }
 
 ## src checks
-for s in "${SRC[@]}"; do
-  src="$(cd "$s" &>/dev/null && pwd)" || { echo "$s not found"; exit 1; } #abspath
-  btrfs subvolume show "$src" &>/dev/null && SRCS+=( "$src" ) || \
-  for dir in $( ls -drt "$src"/* 2>/dev/null ); do
-    btrfs subvolume show "$dir" &>/dev/null && SRCS+=( "$dir" )
-  done
-done
+while read entry; do SRCS+=( "$entry" ); done < <( 
+  for s in "${SRC[@]}"; do
+    src="$(cd "$s" &>/dev/null && pwd)" || { echo "$s not found"; exit 1; } #abspath
+    btrfs subvolume show "$src" &>/dev/null && echo "0|$src" || \
+    for dir in $( ls -drt "$src"/* 2>/dev/null ); do
+      btrfs subvolume show "$dir" &>/dev/null || continue
+      DATE="$( btrfs su sh "$dir" | grep "Creation time:" | awk '{ print $3, $4 }' )"
+      SECS=$( date -d "$DATE" +"%s" )
+      echo "$SECS|$dir"
+    done
+  done | sort -V | sed 's=.*|=='
+)
 [[ ${#SRCS[@]} -eq 0 ]] && { echo "no BTRFS subvolumes found"; exit 1; }
 
 ## check pbzip2
@@ -156,7 +161,7 @@ get_dst_snapshots() {
 ## sync incrementally
 sync_snapshot() {
   local SRC="$1"
-  local ID LIST PATH_ DATE SECS SEEDS SEED SEED_PATH SEED_ARG
+  local ID LIST PATH_ DATE SECS SEED SEED_PATH SEED_ARG
 
   # detect existing
   SRC_UUID=$( btrfs su sh "$SRC" | grep "UUID:" | head -1 | awk '{ print $2 }' )
@@ -166,17 +171,18 @@ sync_snapshot() {
 
   # try to get most recent src snapshot that exists in dst to use as a seed
   LIST="$( btrfs subvolume list -su "$SRC" )"
-  for id in "${DST_UUIDS[@]}"; do
-    ID=$(btrfs su sh -u "$id" "$SRC" 2>/dev/null|grep "UUID:"|head -1|awk '{print $2}')
-    PATH_=$( awk "{ if ( \$14 == \"$ID\" ) print \$16       }" <<<"$LIST" )
-    DATE=$(  awk "{ if ( \$14 == \"$ID\" ) print \$11, \$12 }" <<<"$LIST" )
+  SEED=$( 
+    for id in "${DST_UUIDS[@]}"; do
+      ID=$(btrfs su sh -u "$id" "$SRC" 2>/dev/null|grep "UUID:"|head -1|awk '{print $2}')
+      PATH_=$( awk "{ if ( \$14 == \"$ID\" ) print \$16       }" <<<"$LIST" )
+      DATE=$(  awk "{ if ( \$14 == \"$ID\" ) print \$11, \$12 }" <<<"$LIST" )
 
-    [[ "$ID" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
+      [[ "$ID" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
 
-    SECS=$( date -d "$DATE" +"%s" )
-    SEEDS+=( "$SECS|$PATH_" )
-  done
-  SEED="$(for s in "${SEEDS[@]}";do echo "$s";done|sort -V|tail -1|cut -f2 -d'|')"
+      SECS=$( date -d "$DATE" +"%s" )
+      echo "$SECS|$PATH_"
+    done | sort -V | tail -1 | cut -f2 -d'|'
+  )
 
   # incremental sync argument
   [[ "$SEED" != "" ]] && {
