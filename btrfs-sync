@@ -158,26 +158,41 @@ get_dst_snapshots() {
   )
 }
 
-
 ## sync incrementally
 sync_snapshot() {
   local SRC="$1"
-  local LIST PATH_ DATE SECS SEED SEED_PATH SEED_ARG
+  local PATH_ DATE SECS SEED SEED_PATH SEED_ARG
+  local LIST="$( btrfs subvolume list -su "$SRC" )"
+  local SHOW="$( btrfs subvolume show     "$SRC" )"
 
   # detect existing
-  SRC_UUID=$( btrfs su sh "$SRC" | grep "UUID:" | head -1 | awk '{ print $2 }' )
+  SRC_UUID="$( grep 'UUID:' <<<"$SHOW" | head -1 | awk '{ print $2 }' )"
+  SRC_RXID="$( grep 'Received UUID' <<<"$SHOW"   | awk '{ print $3 }' )"
   for id in "${DST_UUIDS[@]}"; do
-    [[ "$SRC_UUID" == "$id" ]] && { echov "* Skip existing '$SRC'"; return 0; }
+    [[ "$SRC_UUID" == "$id" ]] || [[ "$SRC_RXID" == "$id" ]] && {
+      echov "* Skip existing '$SRC'"
+      return 0; 
+    }
   done
 
   # try to get most recent src snapshot that exists in dst to use as a seed
-  LIST="$( btrfs subvolume list -su "$SRC" )"
   SEED=$( 
     for id in "${DST_UUIDS[@]}"; do
+      # try to match by UUID
       PATH_=$( awk "{ if ( \$14 == \"$id\" ) print \$16       }" <<<"$LIST" )
       DATE=$(  awk "{ if ( \$14 == \"$id\" ) print \$11, \$12 }" <<<"$LIST" )
 
-      [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
+      # try to match by received UUID
+      [[ "$PATH_" == "" ]] && {
+        local PATHS=( $( btrfs su list -u "$SRC" | awk '{ print $11 }' ) )
+        for path in "${PATHS[@]}"; do
+          local SHOWP="$( btrfs su sh "$( dirname "$SRC" )/$( basename "$path" )" 2>/dev/null )"
+          local RXIDP="$( grep 'Received UUID' <<<"$SHOWP" | awk '{ print $3     }' )"
+          local DATEP="$( grep 'Creation time' <<<"$SHOWP" | awk '{ print $3, $4 }' )"
+          [[ "$id" == "$RXIDP" ]] && { PATH_="$path" DATE="$DATEP"; }
+        done
+      }
+      [[ "$PATH_" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
 
       SECS=$( date -d "$DATE" +"%s" )
       echo "$SECS|$PATH_"
