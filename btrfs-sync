@@ -158,10 +158,11 @@ get_dst_snapshots() {
   )
 }
 
+
 ## sync incrementally
 sync_snapshot() {
   local SRC="$1"
-  local ID LIST PATH_ DATE SECS SEED SEED_PATH SEED_ARG
+  local LIST PATH_ DATE SECS SEED SEED_PATH SEED_ARG
 
   # detect existing
   SRC_UUID=$( btrfs su sh "$SRC" | grep "UUID:" | head -1 | awk '{ print $2 }' )
@@ -173,11 +174,10 @@ sync_snapshot() {
   LIST="$( btrfs subvolume list -su "$SRC" )"
   SEED=$( 
     for id in "${DST_UUIDS[@]}"; do
-      ID=$(btrfs su sh -u "$id" "$SRC" 2>/dev/null|grep "UUID:"|head -1|awk '{print $2}')
-      PATH_=$( awk "{ if ( \$14 == \"$ID\" ) print \$16       }" <<<"$LIST" )
-      DATE=$(  awk "{ if ( \$14 == \"$ID\" ) print \$11, \$12 }" <<<"$LIST" )
+      PATH_=$( awk "{ if ( \$14 == \"$id\" ) print \$16       }" <<<"$LIST" )
+      DATE=$(  awk "{ if ( \$14 == \"$id\" ) print \$11, \$12 }" <<<"$LIST" )
 
-      [[ "$ID" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
+      [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
 
       SECS=$( date -d "$DATE" +"%s" )
       echo "$SECS|$PATH_"
