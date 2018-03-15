@@ -161,9 +161,9 @@ get_dst_snapshots() {
 ## sync incrementally
 sync_snapshot() {
   local SRC="$1"
-  local PATH_ DATE SECS SEED SEED_PATH SEED_ARG
-  local LIST="$( btrfs subvolume list -su "$SRC" )"
+  local PATH_ DATE SECS SEED SEED_PATH SEED_ARG PATH_RXID DATE_RXID SHOWP RXIDP DATEP
   local SHOW="$( btrfs subvolume show     "$SRC" )"
+  local LIST="$( btrfs subvolume list -su "$SRC" )"
 
   # detect existing
   SRC_UUID="$( grep 'UUID:' <<<"$SHOW" | head -1 | awk '{ print $2 }' )"
@@ -176,22 +176,32 @@ sync_snapshot() {
   done
 
   # try to get most recent src snapshot that exists in dst to use as a seed
+  local HAVE_RXID=0
+  declare -A PATH_RXID DATE_RXID
+  local PATHS=( $( btrfs su list -u "$SRC" | awk '{ print $11 }' ) )
   SEED=$( 
     for id in "${DST_UUIDS[@]}"; do
       # try to match by UUID
       PATH_=$( awk "{ if ( \$14 == \"$id\" ) print \$16       }" <<<"$LIST" )
       DATE=$(  awk "{ if ( \$14 == \"$id\" ) print \$11, \$12 }" <<<"$LIST" )
 
-      # try to match by received UUID
+      # try to match by received UUID, only if necessary
       [[ "$PATH_" == "" ]] && {
-        local PATHS=( $( btrfs su list -u "$SRC" | awk '{ print $11 }' ) )
-        for path in "${PATHS[@]}"; do
-          local SHOWP="$( btrfs su sh "$( dirname "$SRC" )/$( basename "$path" )" 2>/dev/null )"
-          local RXIDP="$( grep 'Received UUID' <<<"$SHOWP" | awk '{ print $3     }' )"
-          local DATEP="$( grep 'Creation time' <<<"$SHOWP" | awk '{ print $3, $4 }' )"
-          [[ "$id" == "$RXIDP" ]] && { PATH_="$path" DATE="$DATEP"; }
-        done
+        [[ "$HAVE_RXID" == "0" ]] && {
+          for p in "${PATHS[@]}"; do
+            SHOWP="$( btrfs su sh "$( dirname "$SRC" )/$( basename "$p" )" 2>/dev/null )"
+            RXIDP="$( grep 'Received UUID' <<<"$SHOWP" | awk '{ print $3     }' )"
+            DATEP="$( grep 'Creation time' <<<"$SHOWP" | awk '{ print $3, $4 }' )"
+            [[ "$RXIDP" == "" ]] && continue
+            PATH_RXID["$RXIDP"]="$p"
+            DATE_RXID["$RXIDP"]="$DATEP"
+          done
+          HAVE_RXID=1
+        }
+        PATH_="${PATH_RXID["$id"]}"
+         DATE="${DATE_RXID["$id"]}"
       }
+
       [[ "$PATH_" == "" ]] || [[ "$PATH_" == "$( basename "$SRC" )" ]] && continue
 
       SECS=$( date -d "$DATE" +"%s" )
