@@ -107,4 +107,4 @@ EOF
 chmod +x /etc/cron.daily/btrfs-sync
 ```
 
-More at [ownyourbits.com](https://ownyourbits.com)
+More at [ownyourbits.com](https://ownyourbits.com/2018/03/09/easy-sync-of-btrfs-snapshots-with-btrfs-sync/)
