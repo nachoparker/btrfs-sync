@@ -62,8 +62,12 @@ echov() { [[ "$VERBOSE" == 1 ]] && echo "$@" || true; }
 
 #----------------------------------------------------------------------------------------------------------
 
-# parse arguments
+# preliminary checks
 BIN="${0##*/}"
+[[ $# -lt 2      ]] && { print_usage                                ; exit 1; }
+[[ ${EUID} -ne 0 ]] && { echo "Must be run as root. Try 'sudo $BIN'"; exit 1; }
+
+# parse arguments
 KEEP=0
 ZIP=cat PIZ=cat
 SILENT=">/dev/null"
@@ -95,15 +99,11 @@ DST="${@: -1}"
   SSH=( ssh -o ServerAliveInterval=5 -o ConnectTimeout=1 "$NET" )
 }
 [[ "$SSH" != "" ]] && DST_CMD=( ${SSH[@]} ) || DST_CMD=( eval )
+${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"; exit 1; }
 
 #----------------------------------------------------------------------------------------------------------
 
-# checks
-
-## general checks
-[[ $# -lt 2      ]]            && { print_usage                                ; exit 1; }
-[[ ${EUID} -ne 0 ]]            && { echo "Must be run as root. Try 'sudo $BIN'"; exit 1; }
-${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"            ; exit 1; }
+# more checks
 
 ## src checks
 while read entry; do SRCS+=( "$entry" ); done < <( 
