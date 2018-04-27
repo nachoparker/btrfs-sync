@@ -58,7 +58,7 @@ chmod +x /etc/cron.daily/btrfs-sync
 "
 }
 
-echov() { [[ "$VERBOSE" == 1 ]] && echo "$@" || true; }
+echov() { if [[ "$VERBOSE" == 1 ]]; then echo "$@"; fi }
 
 #----------------------------------------------------------------------------------------------------------
 
@@ -104,6 +104,11 @@ ${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"; exit 1; }
 #----------------------------------------------------------------------------------------------------------
 
 # more checks
+
+## don't overlap
+[[ "$SSH" != "" ]] && NUM_PS=0 || NUM_PS=2
+${DST_CMD[@]} "[[ \$( pgrep -c \"btrfs-sync\" ) -ne $NUM_PS ]]" \
+  && { echo "btrfs-sync already running at destination"; exit 1; }
 
 ## src checks
 while read entry; do SRCS+=( "$entry" ); done < <( 
