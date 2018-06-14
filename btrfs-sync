@@ -96,10 +96,10 @@ DST="${@: -1}"
 [[ "$DST" =~ : ]] && {
   NET="$( sed 's|:.*||' <<<"$DST" )"
   DST="$( sed 's|.*:||' <<<"$DST" )"
-  SSH=( ssh -o ServerAliveInterval=5 -o ConnectTimeout=1 "$NET" )
+  SSH=( ssh -o ServerAliveInterval=5 -o ConnectTimeout=1 -o BatchMode=yes "$NET" )
 }
 [[ "$SSH" != "" ]] && DST_CMD=( ${SSH[@]} ) || DST_CMD=( eval )
-${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET"; exit 1; }
+${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET. Do you have passwordless login setup?"; exit 1; }
 
 #----------------------------------------------------------------------------------------------------------
 
