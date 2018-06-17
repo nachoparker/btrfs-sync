@@ -230,11 +230,11 @@ sync_snapshot() {
   [[ "$SEED_ARG" != "" ]] && echov -n " using seed '$SEED'"
   echo "..."
 
-  { btrfs send -q ${SEED_ARG[@]} "$SRC" \
+   btrfs send -q ${SEED_ARG[@]} "$SRC" \
     | "$ZIP" \
     | "${PV[@]}" \
-    | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 | grep -v '^At subvol '" \
-    || exit 1; } | grep -v "^At snapshot "
+    | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 |(grep -v -e'^At subvol ' -e'^At snapshot '||true)" \
+    || exit 1;
   get_dst_snapshots "$DST" # sets DSTS DST_UUIDS
 }
 
