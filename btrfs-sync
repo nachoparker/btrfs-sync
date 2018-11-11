@@ -111,12 +111,10 @@ ${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET. Do you have 
 # more checks
 
 ## don't overlap
-[[ "$SSH" != "" ]] && NUM_PS=0 || NUM_PS=2
-${DST_CMD[@]} "[[ \$( pgrep -c \"btrfs-sync\" ) -ne $NUM_PS ]]" \
-  && { echo "btrfs-sync already running at destination"; exit 1; }
-
-ps -p "$( cat /run/btrfs-sync.pid 2>/dev/null )" &>/dev/null && { echo "$BIN is already running"; exit 1; }
+pgrep -F  /run/btrfs-sync.pid  &>/dev/null && { echo "$BIN is already running"; exit 1; }
 echo $$ > /run/btrfs-sync.pid
+
+${DST_CMD[@]} "pgrep -f btrfs\ receive &>/dev/null" && { echo "btrfs-sync already running at destination"; exit 1; }
 
 ## src checks
 echov "* Check source"
