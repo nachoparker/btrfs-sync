@@ -43,6 +43,7 @@ print_usage() {
   -d|--delete       delete snapshots in <dst> that don't exist in <src>
   -z|--xz           use xz     compression. Saves bandwidth, but uses one CPU
   -Z|--pbzip2       use pbzip2 compression. Saves bandwidth, but uses all CPUs
+  -p|--port         SSH port. Default 22
   -q|--quiet        don't display progress
   -v|--verbose      display more information
   -h|--help         show usage
@@ -71,10 +72,11 @@ BIN="${0##*/}"
 
 # parse arguments
 KEEP=0
+PORT=22
 ZIP=cat PIZ=cat
 SILENT=">/dev/null"
 
-OPTS=$( getopt -o hqzZk:dv -l quiet -l help -l xz -l pbzip2 -l keep: -l delete -l verbose -- "$@" 2>/dev/null )
+OPTS=$( getopt -o hqzZk:p:dv -l quiet -l help -l xz -l pbzip2 -l keep: -l port: -l delete -l verbose -- "$@" 2>/dev/null )
 [[ $? -ne 0 ]] && { echo "error parsing arguments"; exit 1; }
 eval set -- "$OPTS"
 
@@ -84,6 +86,7 @@ while true; do
     -q|--quiet  ) QUIET=1    ; shift 1 ;;
     -d|--delete ) DELETE=1   ; shift 1 ;;
     -k|--keep   ) KEEP=$2    ; shift 2 ;;
+    -p|--port   ) PORT=$2    ; shift 2 ;;
     -z|--xz     ) ZIP=xz     PIZ=( xz     -d ); shift 1 ;;
     -Z|--pbzip2 ) ZIP=pbzip2 PIZ=( pbzip2 -d ); shift 1 ;;
     -v|--verbose) SILENT=""  VERBOSE=1        ; shift 1 ;;
@@ -98,7 +101,7 @@ DST="${@: -1}"
 [[ "$DST" =~ : ]] && {
   NET="$( sed 's|:.*||' <<<"$DST" )"
   DST="$( sed 's|.*:||' <<<"$DST" )"
-  SSH=( ssh -o ServerAliveInterval=5 -o ConnectTimeout=1 -o BatchMode=yes "$NET" )
+  SSH=( ssh -p "$PORT" -o ServerAliveInterval=5 -o ConnectTimeout=1 -o BatchMode=yes "$NET" )
 }
 [[ "$SSH" != "" ]] && DST_CMD=( ${SSH[@]} ) || DST_CMD=( eval )
 ${DST_CMD[@]} true &>/dev/null || { echo "SSH access error to $NET. Do you have passwordless login setup?"; exit 1; }
