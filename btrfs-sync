@@ -294,6 +294,8 @@ done
   echov "* Deleting non existent snapshots..." && \
   ${DST_CMD[@]} sudo btrfs subvolume delete "${DEL_LIST[@]}" $SILENT
 
+exit 0
+
 # License
 #
 # This script is free software; you can redistribute it and/or modify it
