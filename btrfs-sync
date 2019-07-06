@@ -97,6 +97,18 @@ done
 SRC=( "${@:1:$#-1}" )
 DST="${@: -1}"
 
+[[ "$SRC" =~ : ]] && {
+  NET_SRC="$( sed 's|:.*||' <<<"$SRC" )"
+  SRC="$( sed 's|.*:||' <<<"$SRC" )"
+  SSH_SRC=( ssh -p "$PORT" -o ServerAliveInterval=5 -o ConnectTimeout=1 -o BatchMode=yes "$NET_SRC" )
+}
+
+[[ "$SSH_SRC" != "" ]] && SRC_CMD=( ${SSH_SRC[@]} ) || SRC_CMD=( eval )
+${SRC_CMD[@]} test -x "$SRC" &>/dev/null || {
+  [[ "$SSH_SRC" != "" ]] && echo "SSH access error to $NET_SRC. Do you have passwordless login setup, and adequate permissions for $SRC?"
+  [[ "$SSH_SRC" == "" ]] && echo "Access error. Do you have adequate permissions for $SRC?"
+}
+
 # detect remote dst argument
 [[ "$DST" =~ : ]] && {
   NET="$( sed 's|:.*||' <<<"$DST" )"
@@ -123,22 +135,24 @@ ${DST_CMD[@]} "pgrep -f btrfs\ receive &>/dev/null" && { echo "btrfs-sync alread
 ## src checks
 echov "* Check source"
 while read entry; do SRCS+=( "$entry" ); done < <(
-  for s in "${SRC[@]}"; do
-    src="$(cd "$s" &>/dev/null && pwd)" || { echo "$s not found"; exit 1; } #abspath
-    btrfs subvolume show "$src" &>/dev/null && echo "0|$src" || \
-    for dir in $( ls -drt "$src"/* 2>/dev/null ); do
-      DATE="$( btrfs su sh "$dir" 2>/dev/null | grep "Creation time:" | awk '{ print $3, $4 }' )" \
-      || continue   # not a subvolume
-      SECS=$( date -d "$DATE" +"%s" )
-      echo "$SECS|$dir"
-    done
-  done | sort -V | sed 's=.*|=='
+  "${SRC_CMD[@]}" "
+    for s in "${SRC[@]}"; do
+      src=\"\$(cd \"\$s\" &>/dev/null && pwd)\" || { echo \"\$s not found\"; exit 1; } #abspath
+      btrfs subvolume show \"\$src\" &>/dev/null && echo \"0|\$src\" || \
+      for dir in \$( ls -drt \"\$src\"/* 2>/dev/null ); do
+        DATE=\"\$( btrfs su sh \"\$dir\" 2>/dev/null | grep \"Creation time:\" | awk '{ print \$3, \$4 }' )\" \
+        || continue   # not a subvolume
+        SECS=\$( date -d \"\$DATE\" +\"%s\" )
+        echo \"\$SECS|\$dir\"
+      done
+    done | sort -V | sed 's=.*|=='
+  "
 )
 [[ ${#SRCS[@]} -eq 0 ]] && { echo "no BTRFS subvolumes found"; exit 1; }
 
 ## check pbzip2
 [[ "$ZIP" == "pbzip2" ]] && {
-                    type pbzip2 &>/dev/null && \
+    "${SRC_CMD[@]}" type pbzip2 &>/dev/null && \
     "${DST_CMD[@]}" type pbzip2 &>/dev/null || {
       echo "INFO: 'pbzip2' not installed on both ends, fallback to 'xz'"
       ZIP=xz PIZ=unxz
@@ -181,7 +195,7 @@ choose_seed() {      # sets SEED
     # try to get most recent src snapshot that exists in dst to use as a seed
     local RXID_CALCULATED=0
     declare -A PATH_RXID DATE_RXID SHOWP RXIDP DATEP
-    local LIST="$( btrfs subvolume list -su "$SRC" )"
+    local LIST="$( "${SRC_CMD[@]}" sudo btrfs subvolume list -su "$SRC" )"
     SEED=$(
       for id in "${DST_UUIDS[@]}"; do
         # try to match by UUID
@@ -191,9 +205,9 @@ choose_seed() {      # sets SEED
         # try to match by received UUID, only if necessary
         [[ "$PATH_" == "" ]] && {
           [[ "$RXID_CALCULATED" == "0" ]] && { # create table during the first iteration if needed
-            local PATHS=( $( btrfs su list -u "$SRC" | awk '{ print $11 }' ) )
+            local PATHS=( $( "${SRC_CMD[@]}" sudo btrfs su list -u "$SRC" | awk '{ print $11 }' ) )
             for p in "${PATHS[@]}"; do
-              SHOWP="$( btrfs su sh "$( dirname "$SRC" )/$( basename "$p" )" 2>/dev/null )"
+              SHOWP="$( "${SRC_CMD[@]}" sudo btrfs su sh "$( dirname "$SRC" )/$( basename "$p" )" 2>/dev/null )"
               RXIDP="$( grep 'Received UUID' <<<"$SHOWP" | awk '{ print $3     }' )"
               DATEP="$( grep 'Creation time' <<<"$SHOWP" | awk '{ print $3, $4 }' )"
               [[ "$RXIDP" == "" ]] && continue
@@ -216,7 +230,7 @@ choose_seed() {      # sets SEED
 }
 
 exists_at_dst() {
-  local SHOW="$( btrfs subvolume show "$SRC" )"
+  local SHOW="$( "${SRC_CMD[@]}" sudo btrfs subvolume show "$SRC" )"
 
   local SRC_UUID="$( grep 'UUID:' <<<"$SHOW" | head -1 | awk '{ print $2 }' )"
   grep -q "$SRC_UUID" <<<"${DST_UUIDS[@]}" && return 0;
@@ -231,7 +245,7 @@ exists_at_dst() {
 ## sync incrementally
 sync_snapshot() {
   local SRC="$1"
-  [[ -d "$SRC" ]] || return
+  "${SRC_CMD[@]}" test -d "$SRC" || return
 
   exists_at_dst "$SRC" && { echov "* Skip existing '$SRC'"; return 0; }
 
@@ -250,12 +264,13 @@ sync_snapshot() {
   [[ "$SEED_ARG" != "" ]] && echov -n " using seed '$SEED'"
   echo "..."
 
-  btrfs send -q ${SEED_ARG[@]} "$SRC" \
+  "${SRC_CMD[@]}" \
+  sudo btrfs send -q ${SEED_ARG[@]} "$SRC" \
     | "$ZIP" \
     | "${PV[@]}" \
     | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 |(grep -v -e'^At subvol ' -e'^At snapshot '||true)" \
     || {
-      "${DST_CMD[@]}" sudo btrfs subvolume delete "$DST"/"$( basename "$SRC" )"
+      "${DST_CMD[@]}" sudo btrfs subvolume delete "$DST"/"$( basename "$SRC" )" 2>/dev/null
       exit 1;
     }
 
