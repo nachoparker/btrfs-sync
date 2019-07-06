@@ -36,7 +36,7 @@ set -e -o pipefail
 
 # help
 print_usage() {
-  echo "Usage: 
+  echo "Usage:
   $BIN [options] <src> [<src>...] [[user@]host:]<dir>
 
   -k|--keep NUM     keep only last <NUM> sync'ed snapshots
@@ -141,7 +141,7 @@ while read entry; do SRCS+=( "$entry" ); done < <(
                     type pbzip2 &>/dev/null && \
     "${DST_CMD[@]}" type pbzip2 &>/dev/null || {
       echo "INFO: 'pbzip2' not installed on both ends, fallback to 'xz'"
-      ZIP=xz PIZ=unxz 
+      ZIP=xz PIZ=unxz
   }
 }
 
@@ -162,14 +162,14 @@ get_dst_snapshots() {      # sets DSTS DST_UUIDS
   while read entry; do
     DST_UUIDS+=( "$( sed 's=|.*==' <<<"$entry" )" )
     DSTS+=(      "$( sed 's=.*|==' <<<"$entry" )" )
-  done < <( 
+  done < <(
     "${DST_CMD[@]}" "
       DSTS=( \$( ls -d \"$DST\"/* 2>/dev/null ) )
       for dst in \${DSTS[@]}; do
         UUID=\$( sudo btrfs su sh \"\$dst\" 2>/dev/null | grep 'Received UUID' | awk '{ print \$3 }' )
         [[ \"\$UUID\" == \"-\" ]] || [[ \"\$UUID\" == \"\" ]] && continue
         echo \"\$UUID|\$dst\"
-      done" 
+      done"
   )
 }
 
@@ -240,7 +240,7 @@ sync_snapshot() {
   # incremental sync argument
   [[ "$SEED" != "" ]] && {
     local SEED_PATH="$( dirname "$SRC" )/$( basename $SEED )"
-    [[ -d "$SEED_PATH" ]] && 
+    [[ -d "$SEED_PATH" ]] &&
       local SEED_ARG=( -p "$SEED_PATH" ) || \
       echo "INFO: couldn't find $SEED_PATH. Non-incremental mode"
   }
@@ -254,7 +254,10 @@ sync_snapshot() {
     | "$ZIP" \
     | "${PV[@]}" \
     | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 |(grep -v -e'^At subvol ' -e'^At snapshot '||true)" \
-    || exit 1;
+    || {
+      "${DST_CMD[@]}" sudo btrfs subvolume delete "$DST"/"$( basename "$SRC" )"
+      exit 1;
+    }
 
   # update DST list
   DSTS+=("$DST/$( basename "$SRC" )")
