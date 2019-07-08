@@ -37,7 +37,7 @@ set -e -o pipefail
 # help
 print_usage() {
   echo "Usage:
-  $BIN [options] <src> [<src>...] [[user@]host:]<dir>
+  $BIN [options] [[user@]host:]<src> [<src>...] [[user@]host:]<dir>
 
   -k|--keep NUM     keep only last <NUM> sync'ed snapshots
   -d|--delete       delete snapshots in <dst> that don't exist in <src>
@@ -97,6 +97,7 @@ done
 SRC=( "${@:1:$#-1}" )
 DST="${@: -1}"
 
+# detect remote dst argument
 [[ "$SRC" =~ : ]] && {
   NET_SRC="$( sed 's|:.*||' <<<"$SRC" )"
   SRC="$( sed 's|.*:||' <<<"$SRC" )"
@@ -254,7 +255,7 @@ sync_snapshot() {
   # incremental sync argument
   [[ "$SEED" != "" ]] && {
     local SEED_PATH="$( dirname "$SRC" )/$( basename $SEED )"
-    [[ -d "$SEED_PATH" ]] &&
+    "${SRC_CMD[@]}" test -d "$SEED_PATH" &&
       local SEED_ARG=( -p "$SEED_PATH" ) || \
       echo "INFO: couldn't find $SEED_PATH. Non-incremental mode"
   }
@@ -271,7 +272,7 @@ sync_snapshot() {
     | "${DST_CMD[@]}" "${PIZ[@]} | sudo btrfs receive \"$DST\" 2>&1 |(grep -v -e'^At subvol ' -e'^At snapshot '||true)" \
     || {
       "${DST_CMD[@]}" sudo btrfs subvolume delete "$DST"/"$( basename "$SRC" )" 2>/dev/null
-      exit 1;
+      return 1;
     }
 
   # update DST list
@@ -286,7 +287,13 @@ sync_snapshot() {
 echov "* Check destination"
 get_dst_snapshots "$DST" # sets DSTS DST_UUIDS
 for src in "${SRCS[@]}"; do
-  sync_snapshot "$src"
+  sync_snapshot "$src" && RET=0 || RET=1
+  for i in $(seq 1 2); do
+    [[ "$RET" != "1" ]] && break
+    echo "* Retrying '$src'..."
+    sync_snapshot "$src" && RET=0 || RET=1
+  done
+  [[ "$RET" == "1" ]] && { echo "Abort"; exit 1; }
 done
 
 #----------------------------------------------------------------------------------------------------------
