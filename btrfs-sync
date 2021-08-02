@@ -97,7 +97,7 @@ done
 SRC=( "${@:1:$#-1}" )
 DST="${@: -1}"
 
-# detect remote dst argument
+# detect remote src argument
 [[ "$SRC" =~ : ]] && {
   NET_SRC="$( sed 's|:.*||' <<<"$SRC" )"
   SRC="$( sed 's|.*:||' <<<"$SRC" )"
@@ -108,6 +108,7 @@ DST="${@: -1}"
 ${SRC_CMD[@]} test -x "$SRC" &>/dev/null || {
   [[ "$SSH_SRC" != "" ]] && echo "SSH access error to $NET_SRC. Do you have passwordless login setup, and adequate permissions for $SRC?"
   [[ "$SSH_SRC" == "" ]] && echo "Access error. Do you have adequate permissions for $SRC?"
+  exit 1
 }
 
 # detect remote dst argument
