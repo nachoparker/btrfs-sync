@@ -97,7 +97,7 @@ done
 SRC=( "${@:1:$#-1}" )
 DST="${@: -1}"
 
-# detect remote dst argument
+# detect remote src argument
 [[ "$SRC" =~ : ]] && {
   NET_SRC="$( sed 's|:.*||' <<<"$SRC" )"
   SRC="$( sed 's|.*:||' <<<"$SRC" )"
@@ -108,6 +108,7 @@ DST="${@: -1}"
 ${SRC_CMD[@]} test -x "$SRC" &>/dev/null || {
   [[ "$SSH_SRC" != "" ]] && echo "SSH access error to $NET_SRC. Do you have passwordless login setup, and adequate permissions for $SRC?"
   [[ "$SSH_SRC" == "" ]] && echo "Access error. Do you have adequate permissions for $SRC?"
+  exit 1
 }
 
 # detect remote dst argument
@@ -133,6 +134,9 @@ echo $$ > /run/btrfs-sync.pid
 
 ## Make sure, the user's remote shell is bash (not sh)
 ${DST_CMD[@]} "echo \$0 | grep bash > /dev/null" || { echo "Remote user's shell not bash. Shells other than bash are not supported at the moment"; exit 1; }
+
+## Making sure, the remote user has sudo privileges
+${DST_CMD[@]} "sudo echo &> /dev/null" || { echo "Remote user requires sudo privileges"; exit 1; }
 
 ${DST_CMD[@]} "pgrep -f btrfs\ receive &>/dev/null" && { echo "btrfs-sync already running at destination"; exit 1; }
 
