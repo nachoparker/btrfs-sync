@@ -132,12 +132,6 @@ ${DST_CMD[@]} test -x "$DST" &>/dev/null || {
 pgrep -F  /run/btrfs-sync.pid  &>/dev/null && { echo "$BIN is already running"; exit 1; }
 echo $$ > /run/btrfs-sync.pid
 
-## Make sure, the user's remote shell is bash (not sh)
-${DST_CMD[@]} "echo \$0 | grep bash > /dev/null" || { echo "Remote user's shell not bash. Shells other than bash are not supported at the moment"; exit 1; }
-
-## Making sure, the remote user has sudo privileges
-${DST_CMD[@]} "sudo echo &> /dev/null" || { echo "Remote user requires sudo privileges"; exit 1; }
-
 ${DST_CMD[@]} "pgrep -f btrfs\ receive &>/dev/null" && { echo "btrfs-sync already running at destination"; exit 1; }
 
 ## src checks
