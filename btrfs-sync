@@ -249,7 +249,7 @@ sync_snapshot() {
   local SRC="$1"
   "${SRC_CMD[@]}" test -d "$SRC" || return
 
-  exists_at_dst "$SRC" && { echov "* Skip existing '$SRC'"; return 0; }
+  exists_at_dst "$SRC" || { echov "* Skip existing '$SRC'"; return 0; }
 
   choose_seed "$SRC"  # sets SEED
 
