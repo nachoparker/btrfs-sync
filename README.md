@@ -45,13 +45,17 @@ The syntax is similar to that of _scp_
 Usage:
   btrfs-sync [options] <src> [<src>...] [[user@]host:]<dir>
 
-  -k|--keep NUM     keep only last <NUM> sync'ed snapshots
-  -d|--delete       delete snapshots in <dst> that don't exist in <src>
-  -z|--xz           use xz     compression. Saves bandwidth, but uses one CPU
-  -Z|--pbzip2       use pbzip2 compression. Saves bandwidth, but uses all CPUs
-  -q|--quiet        don't display progress
-  -v|--verbose      display more information
-  -h|--help         show usage
+  -k|--keep NUM          keep only last <NUM> sync'ed snapshots
+  -d|--delete            delete snapshots in <dst> that don't exist in <src>
+  -z|--xz                use xz     compression. Saves bandwidth, but uses one CPU
+  -Z|--pbzip2            use pbzip2 compression. Saves bandwidth, but uses all CPUs
+  -p|--port              SSH port. Default 22
+  -L|--rate-limit RATE   limit the transfer to a maximum of RATE bytes per second.
+                         A suffix of \"K\", \"M\", \"G\", or \"T\" can be added to denote
+                         kibibytes (*1024), mebibytes, and so on.
+  -q|--quiet             don't display progress
+  -v|--verbose           display more information
+  -h|--help              show usage
 
 <src> can either be a single snapshot, or a folder containing snapshots
 <user> requires privileged permissions at <host> for the 'btrfs' command
